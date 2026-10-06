@@ -27,6 +27,7 @@ from .core import (
     StateStore,
     extract_openids,
     looks_like_openid,
+    parse_answer,
 )
 from .qqapi import QQOfficialAPI
 
@@ -68,6 +69,7 @@ class QQAutoKick(Star):
         self._verify_loop_task = None
         self._verify_lock = asyncio.Lock()
         self._recent_messages = {}  # {group: {message_id: ts}} 防同一条消息被重复派发处理
+        self._reminded = {}  # {(group, user): ts} 「请回复数字」提醒节流
         self._ready = asyncio.Event()
 
     # ==================== 生命周期 ====================
@@ -347,6 +349,15 @@ class QQAutoKick(Star):
     def clock_now(self):
         return time.time()
 
+    def _reminder_due(self, group: str, user: str) -> bool:
+        """「请回复答案数字」提醒节流：同一成员 60 秒内最多提醒一次。"""
+        now = time.time()
+        key = (group, user)
+        if now - self._reminded.get(key, 0) < 60:
+            return False
+        self._reminded[key] = now
+        return True
+
     @staticmethod
     def _extract_answer_number(event, text: str) -> str:
         """从作答消息里提取数字答案。
@@ -354,8 +365,6 @@ class QQAutoKick(Star):
         官方平台的「引用 + 文字」消息，event.message_str 可能不含纯数字，
         因此要汇总所有 Plain 组件再提取。返回数字字符串；无数字返回 ""。
         """
-        import re
-
         candidates = []
         stripped = (text or "").strip()
         if stripped:
@@ -371,11 +380,11 @@ class QQAutoKick(Star):
         for cand in candidates:
             if cand.lstrip("-").isdigit():
                 return cand
-        # 2) 从文本中提取第一个整数（如「等于41」/ 引用场景）
+        # 2) 从文本中提取第一个整数（如「等于41」/ 引用场景）；非数字返回 ""
         for cand in candidates:
-            m = re.search(r"-?\d+", cand)
-            if m:
-                return m.group()
+            number = parse_answer(cand)
+            if number:
+                return number
         return ""
 
     async def _handle_verify(self, event, group: str, user: str, text: str) -> bool:
@@ -390,6 +399,17 @@ class QQAutoKick(Star):
         # 该成员已在验证 → 检查是否作答
         if pending:
             extracted = self._extract_answer_number(event, text)
+            if not extracted:
+                # 关键修复：图片 / 表情 / 闲聊**不算作答**，不判错、不禁言。
+                # 以前这里会把任何消息当答案，导致发个表情就被误禁言。
+                if (text or "").strip() and self._reminder_due(group, user):
+                    with suppress(Exception):
+                        await event.send(
+                            event.plain_result(
+                                f"{self._at_openid(user)} 请直接回复答案数字，例如：12"
+                            )
+                        )
+                return True  # 消费掉，但保留待验证状态，等数字答案
             item_before = self.verify.peek(group, user)  # answer 会删除，先记录便于诊断
             result = self.verify.answer(group, user, extracted)
             if result == "ok":

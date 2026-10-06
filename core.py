@@ -34,6 +34,21 @@ def extract_openids(text: str) -> List[str]:
     return OPENID_RE.findall(text or "")
 
 
+def parse_answer(raw: str) -> str:
+    """从一条消息文本解析作答数字。
+
+    只有**含数字**的内容才算作答；图片/表情/闲聊返回空串，
+    调用方据此判断「这不是答案」，避免把闲聊当成答错。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    if text.lstrip("-").isdigit():
+        return text
+    m = re.search(r"-?\d+", text)
+    return m.group() if m else ""
+
+
 def _action(value) -> str:
     value = str(value or "").strip().lower()
     return value if value in ACTIONS else "off"

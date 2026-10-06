@@ -21,6 +21,7 @@ from core import (  # noqa: E402
     StateStore,
     extract_openids,
     looks_like_openid,
+    parse_answer,
 )
 
 GROUP = "3E5D8A1F7B2C9E4D6A0F1B3C5D7E9F2A"
@@ -76,6 +77,24 @@ class IdTests(unittest.TestCase):
     def test_extract(self):
         text = f"@某人 {USER} 和 {USER.lower()}"
         self.assertEqual(len(extract_openids(text)), 2)
+
+
+class AnswerParseTests(unittest.TestCase):
+    """复现线上误禁言：图片/表情/闲聊必须不算作答。"""
+
+    def test_plain_number(self):
+        self.assertEqual(parse_answer("41"), "41")
+        self.assertEqual(parse_answer(" 45 "), "45")
+        self.assertEqual(parse_answer("-3"), "-3")
+
+    def test_non_numeric_is_not_an_answer(self):
+        for raw in ("", "   ", "[图片]", "[表情]", "我天，高雅啊", "可恶的肥鲸", "神了"):
+            self.assertEqual(parse_answer(raw), "", f"{raw!r} 不应被判为作答")
+
+    def test_number_inside_text(self):
+        self.assertEqual(parse_answer("等于41"), "41")
+        self.assertEqual(parse_answer("41/1不就是等于41吗"), "41")
+        self.assertEqual(parse_answer("答案是 8 吧"), "8")
 
 
 class RuleTests(unittest.TestCase):
