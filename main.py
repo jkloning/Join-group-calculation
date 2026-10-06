@@ -330,12 +330,16 @@ class QQAutoKick(Star):
         """驱动算术验证。返回 True 表示该消息已被验证逻辑处理。"""
         if not self._verify_enabled(group):
             return False
+        # 已通过验证的成员不再重新出题（状态持久化，重启/重装不丢）
+        if self.store.is_verified(group, user):
+            return False
         pending, status = self.verify.is_pending(group, user)
 
         # 该成员已在验证 → 检查是否作答
         if pending:
             result = self.verify.answer(group, user, text)
             if result == "ok":
+                self.store.add_verified(group, user)
                 await event.send(
                     event.plain_result(f"{self._at_openid(user)} 验证通过，欢迎入群。")
                 )
@@ -694,6 +698,7 @@ class QQAutoKick(Star):
         if on:
             count = sum(1 for key in self.verify._pending if key[0] == group)
             lines.append(f"待验证成员：{count} 人")
+            lines.append(f"已通过验证（持久化）：{len(self.store.verified(group))} 人")
         yield event.plain_result("\n".join(lines))
 
     @filter.command("通过", alias={"verify_pass"})
@@ -712,7 +717,9 @@ class QQAutoKick(Star):
             yield event.plain_result("未识别到目标 openid。用法：/通过 <32位openid>。")
             return
         removed = self.verify.force(group, user)
-        yield event.plain_result("已放行该成员。" if removed else "该成员不在待验证状态。")
+        # 手动放行同样落盘「已验证」，避免下次发言被重新验证
+        self.store.add_verified(group, user)
+        yield event.plain_result("已放行该成员。" if removed else "该成员不在待验证状态（已标记为已验证）。")
 
     @filter.command("踢人待办", alias={"kick_pending"})
     async def pending(self, event: AstrMessageEvent, action: str = ""):

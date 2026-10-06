@@ -341,6 +341,24 @@ class StateStore:
         self.save()
         return True
 
+    # 每群「已通过入群算术验证」成员名单（持久化，重启/重装不丢失）
+    def verified(self, group_id: str) -> List[str]:
+        item = self.group(group_id)
+        item.setdefault("verified", [])
+        return [str(x) for x in item.get("verified", [])]
+
+    def is_verified(self, group_id: str, user_id: str) -> bool:
+        return str(user_id) in self.verified(group_id)
+
+    def add_verified(self, group_id: str, user_id: str) -> None:
+        item = self.group(group_id)
+        item.setdefault("verified", [])
+        table = [str(x) for x in item.get("verified", [])]
+        if user_id not in table:
+            table.append(str(user_id))
+            item["verified"] = table
+            self.save()
+
     def toggle(self, group_id: str) -> bool:
         value = not self.is_enabled(group_id)
         self.set_enabled(group_id, value)

@@ -291,6 +291,17 @@ class StoreTests(unittest.TestCase):
         store.add_keyword(GROUP, "A词")
         self.assertEqual(store.group_keywords(other), [])
 
+    def test_verified_persist_roundtrip(self):
+        store = StateStore(self.path)
+        self.assertFalse(store.is_verified(GROUP, USER))
+        store.add_verified(GROUP, USER)
+        self.assertTrue(store.is_verified(GROUP, USER))
+        reloaded = StateStore(self.path)
+        self.assertTrue(reloaded.is_verified(GROUP, USER))
+        self.assertEqual(reloaded.verified(GROUP), [USER])
+        # 其他群不受影响
+        self.assertFalse(reloaded.is_verified("9" * 32, USER))
+
     def test_corrupt_file_recovers(self):
         self.path.write_text("{not json", encoding="utf-8")
         store = StateStore(self.path)
