@@ -1,0 +1,6 @@
+name: astrbot_plugin_qq_autokick
+display_name: QQ群自动踢人
+desc: QQ官方机器人（Websocket）群自动踢人/禁言：刷屏、关键词、广告链接、新人广告自动处置；踢人接口无权限时自动降级禁言。
+version: v1.0.0
+author: local
+astrbot_version: '>=4.24.2'
