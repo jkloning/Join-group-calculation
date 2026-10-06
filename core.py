@@ -378,6 +378,31 @@ class StateStore:
             item["verified"] = table
             self.save()
 
+    def clear_verified(self, group_id: str) -> int:
+        """清空某群已验证名单，返回清掉的条数（用于「重新验证全群」）。"""
+        item = self.group(group_id)
+        removed = len(item.get("verified", []))
+        item["verified"] = []
+        self.save()
+        return removed
+
+    def import_verified(self, group_id: str, openids: List[str]) -> int:
+        """批量导入已验证 openid，返回新增条数（用于更新后恢复名单）。"""
+        item = self.group(group_id)
+        item.setdefault("verified", [])
+        table = [str(x) for x in item.get("verified", [])]
+        added = 0
+        for raw in openids:
+            value = str(raw or "").strip()
+            if not value or value in table:
+                continue
+            table.append(value)
+            added += 1
+        item["verified"] = table
+        if added:
+            self.save()
+        return added
+
     def toggle(self, group_id: str) -> bool:
         value = not self.is_enabled(group_id)
         self.set_enabled(group_id, value)

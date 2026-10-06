@@ -20,5 +20,6 @@
   "verify_enabled": {"description": "总开关：新成员入群算术验证（先到先见即视为入群）", "type": "bool", "default": true},
   "verify_timeout_sec": {"description": "算术验证限时（秒，默认 600 = 10 分钟），超时未答自动踢", "type": "int", "default": 600},
   "verify_max_number": {"description": "算术题数字上限（50 以内即填 50）", "type": "int", "default": 50},
-  "verify_wrong_mute_seconds": {"description": "答错时直接禁言时长（秒，默认 600 = 10 分钟）", "type": "int", "default": 600}
+  "verify_wrong_mute_seconds": {"description": "答错时直接禁言时长（秒，默认 600 = 10 分钟）", "type": "int", "default": 600},
+  "state_file": {"description": "可选：状态文件绝对路径（已验证名单/白名单/开关）。留空则用 AstrBot 数据目录 data/plugin_data/astrbot_plugin_qq_autokick/state.json，更新插件不会删", "type": "string", "default": ""}
 }

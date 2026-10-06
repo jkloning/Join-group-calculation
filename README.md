@@ -52,6 +52,9 @@ AstrBot/data/plugins/astrbot_plugin_qq_autokick/
 | `/踢人加词 <内容>` / `/踢人删词 <内容>` / `/踢人词表` | 「命中即踢」动态词表管理 |
 | `/验证开` `/验证关` `/验证状态` | 入群算术验证开关与状态 |
 | `/通过 <openid>` | 管理员手动放行某成员验证 |
+| `/验证导出` | 导出本群已验证名单（并写备份文件），更新前备份用 |
+| `/验证导入 [openid列表]` | 更新/迁移后恢复名单；不带参数时读备份文件 |
+| `/验证清除 确认` | 清空本群已验证名单（全群重新验证） |
 | `/踢人待办 [清空]` | 查看/清空需人工移出的降级记录 |
 | `/踢人帮助` | 指令总览 |
 
@@ -77,6 +80,37 @@ AstrBot/data/plugins/astrbot_plugin_qq_autokick/
 > **平台限制说明**：QQ 官方机器人**没有「普通成员入群」事件**（官方只给机器人自己被拉入/移出的通知）。所以本功能用**「机器人第一次在该群看到该成员发言」当作入群锚点**——这是官方平台下最接近「入群即验证」的可行方案。想卡住入群那一刻，需换带完整群事件的 NapCat/Lagrange 适配器（本插件的验证逻辑在 OneBot 下同样可用，且可直接 `set_group_kick` 踢人）。
 
 > **重启/重装不重复验证**：已通过验证（含 `/通过` 手动放行）的成员会写入本群持久化名单（`state.json` 的 `verified` 表），插件重载、AstrBot 重启、重新安装都**不会**让这些人再次被出题。白名单成员天然不参与验证。
+
+### 服务器部署：更新插件如何保住「已通过」名单
+
+名单**不在插件目录里**，而在 AstrBot 数据目录，所以「更新插件」不会删它：
+
+```text
+插件代码：/AstrBot/data/plugins/astrbot_plugin_qq_autokick/      ← 更新会覆盖
+状态数据：/AstrBot/data/plugin_data/astrbot_plugin_qq_autokick/state.json  ← 更新不动
+```
+
+插件启动时会把这行打进日志，服务器上直接看日志就能确认路径：
+
+```text
+[auto_kick] 状态文件：/AstrBot/data/plugin_data/astrbot_plugin_qq_autokick/state.json
+```
+
+**三重保险**：
+
+1. **指定自定义路径**：配置项 `state_file` 填绝对路径（如 `/data/autokick/state.json`），把数据放到挂载卷/备份盘，与插件目录彻底解耦。
+2. **导出备份**：群里发 `/验证导出`，会把名单打印出来并同时写入备份文件 `verified_backup_<群尾号>.txt`（在状态文件同目录），服务器上可直接 `scp`。
+3. **更新后恢复**：发一次 `/验证导入`（自动读同目录备份文件），或 `/验证导入 <openid列表>` 手动贴。
+
+```bash
+# 服务器上更新前的推荐做法
+cp /AstrBot/data/plugin_data/astrbot_plugin_qq_autokick/state.json /root/autokick-state.bak
+# 更新插件后
+cp /root/autokick-state.bak /AstrBot/data/plugin_data/astrbot_plugin_qq_autokick/state.json
+# 重启 AstrBot / 重载插件即可，名单原样恢复
+```
+
+> 配置项（appid/secret/关键词/阈值）是 AstrBot 存的插件配置，更新时若被重置，装之前先备份 `_conf_schema.json` 对应的那份配置；`state.json` 只管**名单与开关**。
 
 执行流程：
 
@@ -139,4 +173,4 @@ cd astrbot_plugin_qq_autokick
 python -m unittest discover -s tests -t . -v
 ```
 
-38 条用例覆盖刷屏窗口滑动、复读、关键词开关、命中即踢词表、算术验证出题/判题/超时/放行/已验证持久化、作答数字解析（图片与闲聊不算作答）、链接与新人判定、冷却、状态持久化与容错读取。
+41 条用例覆盖刷屏窗口滑动、复读、关键词开关、命中即踢词表、算术验证出题/判题/超时/放行、已验证名单持久化与更新后恢复（导入/清除/去重）、作答数字解析（图片与闲聊不算作答）、链接与新人判定、冷却、状态持久化与容错读取。

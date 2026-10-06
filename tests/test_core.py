@@ -321,6 +321,34 @@ class StoreTests(unittest.TestCase):
         # 其他群不受影响
         self.assertFalse(reloaded.is_verified("9" * 32, USER))
 
+    def test_verified_survives_reload_simulating_plugin_update(self):
+        """模拟更新插件：数据文件在 plugin_data 目录，插件目录被覆盖后仍能读回。"""
+        store = StateStore(self.path)
+        store.add_verified(GROUP, USER)
+        other = "A" * 32
+        store.add_verified(GROUP, other)
+        # 重新实例化 = 插件重新加载
+        again = StateStore(self.path)
+        self.assertEqual(sorted(again.verified(GROUP)), sorted([USER, other]))
+        self.assertTrue(again.is_verified(GROUP, USER))
+
+    def test_clear_verified(self):
+        store = StateStore(self.path)
+        store.add_verified(GROUP, USER)
+        store.add_verified(GROUP, "A" * 32)
+        self.assertEqual(store.clear_verified(GROUP), 2)
+        self.assertEqual(StateStore(self.path).verified(GROUP), [])
+        self.assertEqual(store.clear_verified(GROUP), 0)
+
+    def test_import_verified_dedup_and_persist(self):
+        store = StateStore(self.path)
+        store.add_verified(GROUP, USER)
+        added = store.import_verified(GROUP, [USER, "A" * 32, "A" * 32, "  ", "B" * 32])
+        self.assertEqual(added, 2)  # USER 已存在、重复项与空白被跳过
+        reloaded = StateStore(self.path)
+        self.assertEqual(len(reloaded.verified(GROUP)), 3)
+        self.assertEqual(reloaded.import_verified(GROUP, [USER]), 0)
+
     def test_corrupt_file_recovers(self):
         self.path.write_text("{not json", encoding="utf-8")
         store = StateStore(self.path)

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import suppress
+from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -58,7 +59,12 @@ class QQAutoKick(Star):
         super().__init__(context)
         self.config = config or {}
         data_dir = StarTools.get_data_dir(PLUGIN_NAME)
-        self.store = StateStore(data_dir / "state.json")
+        # 数据默认放在 AstrBot 数据目录（不在插件目录内，更新插件不会删）：
+        #   /AstrBot/data/plugin_data/astrbot_plugin_qq_autokick/state.json
+        # 也可用配置 state_file 指向任意持久路径（如挂载卷 /data/autokick/state.json）。
+        custom_state = self._value("state_file", "state_path")
+        self.state_path = Path(custom_state).expanduser() if custom_state else (data_dir / "state.json")
+        self.store = StateStore(self.state_path)
         self.engine = RuleEngine(self.config)
         self.api = QQOfficialAPI(
             self._value("appid", "app_id", "appId"),
@@ -83,6 +89,10 @@ class QQAutoKick(Star):
         logger.info(
             "[auto_kick] 已加载；AppID 配置："
             + ("已就绪" if self.api.configured else "缺失（请在插件配置填写 appid / secret）")
+        )
+        logger.info(
+            f"[auto_kick] 状态文件：{self.state_path}"
+            "（已验证名单、白名单、开关都存这里；更新插件不会删，备份这个文件即可保住已通过验证的人）"
         )
         if self._verify_enabled_anywhere():
             self._verify_loop_task = asyncio.create_task(
@@ -805,6 +815,85 @@ class QQAutoKick(Star):
         self.store.add_verified(group, user)
         yield event.plain_result("已放行该成员。" if removed else "该成员不在待验证状态（已标记为已验证）。")
 
+    @filter.command("验证导出", alias={"verify_export"})
+    async def verify_export(self, event: AstrMessageEvent):
+        """导出本群已验证名单（用于更新/迁移前备份）：/验证导出。"""
+        event.stop_event()
+        group = str(event.get_group_id() or "")
+        if not group:
+            yield event.plain_result("请在群内使用。")
+            return
+        if (msg := self._require_admin(event)):
+            yield event.plain_result(msg)
+            return
+        rows = self.store.verified(group)
+        if not rows:
+            yield event.plain_result(f"本群已验证名单为空。\n状态文件：{self.state_path}")
+            return
+        # 备份文件写到状态文件同目录，方便服务器上直接 scp/复制
+        backup = self.state_path.with_name(f"verified_backup_{group[-8:]}.txt")
+        try:
+            backup.write_text("\n".join(rows), encoding="utf-8")
+            saved = f"\n备份已写入：{backup}"
+        except Exception as exc:
+            saved = f"\n（备份文件写入失败：{type(exc).__name__}，可手动复制下面的名单）"
+        yield event.plain_result(
+            f"本群已验证 {len(rows)} 人，复制保存即可在更新后导入：\n"
+            + "\n".join(rows[:50])
+            + ("\n..." if len(rows) > 50 else "")
+            + saved
+        )
+
+    @filter.command("验证导入", alias={"verify_import"})
+    async def verify_import(self, event: AstrMessageEvent, payload: str = ""):
+        """导入已验证名单（换行/空格/逗号分隔的 openid）：/验证导入 <openid列表>。"""
+        event.stop_event()
+        group = str(event.get_group_id() or "")
+        if not group:
+            yield event.plain_result("请在群内使用。")
+            return
+        if (msg := self._require_admin(event)):
+            yield event.plain_result(msg)
+            return
+        raw = payload or ""
+        # 也支持直接从备份文件导入
+        if not raw.strip():
+            backup = self.state_path.with_name(f"verified_backup_{group[-8:]}.txt")
+            if backup.exists():
+                with suppress(Exception):
+                    raw = backup.read_text(encoding="utf-8")
+        tokens = [t for t in extract_openids(raw)]
+        if not tokens:
+            yield event.plain_result(
+                "未解析到 openid。用法：/验证导入 <32位openid>（可空格/换行分隔），"
+                "或先 /验证导出 生成备份文件后再发一次 /验证导入。"
+            )
+            return
+        added = self.store.import_verified(group, tokens)
+        yield event.plain_result(
+            f"已导入 {added} 个新 openid；本群已验证名单共 {len(self.store.verified(group))} 人。"
+        )
+
+    @filter.command("验证清除", alias={"verify_clear"})
+    async def verify_clear(self, event: AstrMessageEvent, confirm: str = ""):
+        """清空本群已验证名单（全群重新验证）：/验证清除 确认。"""
+        event.stop_event()
+        group = str(event.get_group_id() or "")
+        if not group:
+            yield event.plain_result("请在群内使用。")
+            return
+        if (msg := self._require_admin(event)):
+            yield event.plain_result(msg)
+            return
+        if confirm.strip() not in ("确认", "yes", "confirm"):
+            yield event.plain_result(
+                f"这会清空本群已验证名单（当前 {len(self.store.verified(group))} 人）。"
+                "确认请发送：/验证清除 确认"
+            )
+            return
+        removed = self.store.clear_verified(group)
+        yield event.plain_result(f"已清空 {removed} 条已验证记录，本群成员将重新进入验证流程。")
+
     @filter.command("踢人待办", alias={"kick_pending"})
     async def pending(self, event: AstrMessageEvent, action: str = ""):
         """查看/清空待办：/踢人待办 [清空]。"""
@@ -850,6 +939,9 @@ class QQAutoKick(Star):
             "/验证开 开启入群算术验证｜/验证关 关闭\n"
             "/验证状态 查看验证开关、限时与待验证人数\n"
             "/通过 <openid> 管理员手动放行验证\n"
+            "/验证导出 导出本群已验证名单（更新前备份）\n"
+            "/验证导入 <openid列表> 更新后恢复名单\n"
+            "/验证清除 确认 清空本群已验证（全群重新验证）\n"
             "/踢人待办 [清空]\n"
             "注意：官方平台只提供 openid（32 位十六进制），不是 QQ 号。"
         )
