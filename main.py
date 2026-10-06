@@ -67,6 +67,7 @@ class QQAutoKick(Star):
         self.verify_wrong_mute_seconds = max(60, int(self.config.get("verify_wrong_mute_seconds", 600)))
         self._verify_loop_task = None
         self._verify_lock = asyncio.Lock()
+        self._recent_messages = {}  # {group: {message_id: ts}} 防同一条消息被重复派发处理
         self._ready = asyncio.Event()
 
     # ==================== 生命周期 ====================
@@ -255,6 +256,26 @@ class QQAutoKick(Star):
         """官方群消息中 @ 某成员。平台不保证渲染，但带 openid 便于识别作答对象。"""
         return f"<@!{openid}>"
 
+    def _dedup_ok(self, group: str, event) -> bool:
+        """最近阈值内同一 message_id 只处理一次，避免重复事件导致重复判定。"""
+        try:
+            mid = str(getattr(event.message_obj, "id", "") or getattr(event.message_obj, "message_id", "") or "")
+        except Exception:
+            mid = ""
+        if not mid:
+            return True
+        now = time.time()
+        bucket = self._recent_messages.get(group, {})
+        last = bucket.get(mid)
+        # 30 秒窗口内见过的同 id 消息直接丢弃
+        if last is not None and now - last < 30:
+            return False
+        bucket[mid] = now
+        if len(bucket) > 200:
+            bucket = {k: v for k, v in bucket.items() if now - v < 30}
+        self._recent_messages[group] = bucket
+        return True
+
     async def _enforce_no_event(self, group: str, user: str, decision: Decision) -> str:
         """后台定时器踢人：不依赖事件对象，走官方接口真踢→降级禁言。"""
         if not self.api.configured:
@@ -326,6 +347,37 @@ class QQAutoKick(Star):
     def clock_now(self):
         return time.time()
 
+    @staticmethod
+    def _extract_answer_number(event, text: str) -> str:
+        """从作答消息里提取数字答案。
+
+        官方平台的「引用 + 文字」消息，event.message_str 可能不含纯数字，
+        因此要汇总所有 Plain 组件再提取。返回数字字符串；无数字返回 ""。
+        """
+        import re
+
+        candidates = []
+        stripped = (text or "").strip()
+        if stripped:
+            candidates.append(stripped)
+        try:
+            for comp in event.message_obj.message:
+                ctext = str(getattr(comp, "text", "") or "").strip()
+                if ctext:
+                    candidates.append(ctext)
+        except Exception:
+            pass
+        # 1) 整条就是纯数字：直接采用（覆盖大多数直接回数字的情况）
+        for cand in candidates:
+            if cand.lstrip("-").isdigit():
+                return cand
+        # 2) 从文本中提取第一个整数（如「等于41」/ 引用场景）
+        for cand in candidates:
+            m = re.search(r"-?\d+", cand)
+            if m:
+                return m.group()
+        return ""
+
     async def _handle_verify(self, event, group: str, user: str, text: str) -> bool:
         """驱动算术验证。返回 True 表示该消息已被验证逻辑处理。"""
         if not self._verify_enabled(group):
@@ -337,14 +389,23 @@ class QQAutoKick(Star):
 
         # 该成员已在验证 → 检查是否作答
         if pending:
-            result = self.verify.answer(group, user, text)
+            extracted = self._extract_answer_number(event, text)
+            item_before = self.verify.peek(group, user)  # answer 会删除，先记录便于诊断
+            result = self.verify.answer(group, user, extracted)
             if result == "ok":
                 self.store.add_verified(group, user)
                 await event.send(
                     event.plain_result(f"{self._at_openid(user)} 验证通过，欢迎入群。")
                 )
             elif result == "wrong":
-                # 答错 / 答非数字 → 直接禁言（走官方接口，失败则记待办）
+                # 答错 / 答非数字 → 直接禁言（走官方接口，失败则记待办）。
+                # 加诊断日志，便于排查「正确数字却被判错」的误禁言。
+                logger.info(
+                    f"[auto_kick] 验证答错 -> 禁言 群={group} 成员={user} "
+                    f"received='{text.strip()}' extracted='{extracted}' "
+                    f"expected={item_before.get('answer') if item_before else None} "
+                    f"expr={item_before.get('expr') if item_before else None}"
+                )
                 await self._enforce(
                     event,
                     group,
@@ -390,6 +451,9 @@ class QQAutoKick(Star):
                 return  # 指令交给下面的命令处理
             sender = str(event.get_sender_id() or "")
             if not sender or sender in self.store.whitelist(group):
+                return
+            # 防同一条消息被 AstrBot 通过多类事件重复派发，导致作答被重复处理。
+            if not self._dedup_ok(group, event):
                 return
             # 入群算术验证：首次发言触发出题；作答期拦截其他处置。
             # 验证逻辑消费了这条消息时，阻断后续插件（如 LLM 人设）抢答。

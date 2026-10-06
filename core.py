@@ -251,6 +251,10 @@ class ArithVerify:
             return True
         return False
 
+    def peek(self, group: str, user: str):
+        """读取当前待验证条目（用于诊断/批准）。无则返回 None。"""
+        return self._pending.get((group, user))
+
 
 class StateStore:
     """JSON 持久化：每群开关、白名单、待办（踢人接口无权限时登记）。"""
