@@ -387,8 +387,11 @@ class QQAutoKick(Star):
             sender = str(event.get_sender_id() or "")
             if not sender or sender in self.store.whitelist(group):
                 return
-            # 入群算术验证：首次发言触发出题；作答期拦截其他处置
+            # 入群算术验证：首次发言触发出题；作答期拦截其他处置。
+            # 验证逻辑消费了这条消息时，阻断后续插件（如 LLM 人设）抢答。
             if await self._handle_verify(event, group, sender, text):
+                with suppress(Exception):
+                    event.stop_event()
                 return
             # 欢迎提醒（仅当算术验证关闭时使用；否则由出题消息承担欢迎）
             if (
