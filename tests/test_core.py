@@ -219,6 +219,25 @@ class RuleTests(unittest.TestCase):
         rules.forget(GROUP, USER)
         self.assertFalse(rules.inspect(GROUP, USER, "新的一轮").hit)
 
+    def test_untouch_rolls_back_first_seen(self):
+        """出题发送失败时要能回滚，否则该成员再也不会被出题。"""
+        clock = FakeClock()
+        rules = engine(clock)
+        self.assertTrue(rules.touch(GROUP, USER))
+        self.assertTrue(rules.is_seen(GROUP, USER))
+        self.assertFalse(rules.touch(GROUP, USER))  # 已观测过
+        rules.untouch(GROUP, USER)
+        self.assertFalse(rules.is_seen(GROUP, USER))
+        self.assertTrue(rules.touch(GROUP, USER))  # 回滚后可重新出题
+
+    def test_untouch_is_per_member(self):
+        clock = FakeClock()
+        rules = engine(clock)
+        rules.touch(GROUP, USER)
+        rules.untouch(GROUP, "B" * 32)
+        self.assertTrue(rules.is_seen(GROUP, USER))
+        self.assertFalse(rules.is_seen(GROUP, "B" * 32))
+
     def test_groups_are_isolated(self):
         clock = FakeClock()
         rules = engine(clock)

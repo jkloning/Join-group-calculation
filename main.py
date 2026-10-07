@@ -305,21 +305,26 @@ class QQAutoKick(Star):
         """官方群消息中 @ 某成员。平台不保证渲染，但带 openid 便于识别作答对象。"""
         return f"<@!{openid}>"
 
-    def _dedup_ok(self, group: str, event) -> bool:
-        """最近阈值内同一 message_id 只处理一次，避免重复事件导致重复判定。"""
+    def _dedup_ok(self, group: str, event, sender: str = "") -> bool:
+        """同一发送者的同一条消息只处理一次，避免重复事件导致重复判定。
+
+        注意：去重键必须带上发送者。若平台给的消息 ID 不唯一（或所有消息共用一个值），
+        只用 ID 去重会把**别人的消息**一并丢掉，表现为「某人被直接跳过、不出题」。
+        """
         try:
             mid = str(getattr(event.message_obj, "id", "") or getattr(event.message_obj, "message_id", "") or "")
         except Exception:
             mid = ""
         if not mid:
             return True
+        key = f"{mid}\u0000{sender}"
         now = time.time()
         bucket = self._recent_messages.get(group, {})
-        last = bucket.get(mid)
-        # 30 秒窗口内见过的同 id 消息直接丢弃
+        last = bucket.get(key)
         if last is not None and now - last < 30:
+            logger.info(f"[auto_kick] 重复事件已忽略 群={group} 成员={sender} msg={mid}")
             return False
-        bucket[mid] = now
+        bucket[key] = now
         if len(bucket) > 200:
             bucket = {k: v for k, v in bucket.items() if now - v < 30}
         self._recent_messages[group] = bucket
@@ -492,17 +497,33 @@ class QQAutoKick(Star):
         # 不在验证中，且是首次观测到该成员 → 发起验证
         first_seen = self.engine.touch(group, user)
         if not first_seen:
+            # 已出过题/已观测过：不再重复出题（真正的完成态由 is_verified 决定）
             return False
         issued = self.verify.challenge(group, user)
         if issued is None:
+            self.engine.untouch(group, user)
             return False
         expr, answer, timeout = issued
-        await event.send(
-            event.plain_result(
-                f"{self._at_openid(user)} 欢迎入群！请在 {timeout // 60} 分钟内回答："
-                f"{expr} = ?（直接回复答案数字即可）"
+        sent = False
+        try:
+            await event.send(
+                event.plain_result(
+                    f"{self._at_openid(user)} 欢迎入群！请在 {timeout // 60} 分钟内回答："
+                    f"{expr} = ?（直接回复答案数字即可）"
+                )
             )
-        )
+            sent = True
+        except Exception as exc:
+            logger.warning(
+                f"[auto_kick] 出题消息发送失败 群={group} 成员={user}：{type(exc).__name__}: {exc}"
+            )
+        if not sent:
+            # 关键修复：题目没发出去就回滚状态。
+            # 否则该成员会「静默待验证 → 10 分钟后被误踢」，且因为已标记见过而永不再出题。
+            self.verify.force(group, user)
+            self.engine.untouch(group, user)
+            return False
+        logger.info(f"[auto_kick] 已出题 群={group} 成员={user} 题目={expr}")
         return True
 
     @_watch
@@ -531,7 +552,7 @@ class QQAutoKick(Star):
                 logger.info(f"[auto_kick] 昵称疑似机器人，已忽略：{sender_name}（{sender}）")
                 return
             # 防同一条消息被 AstrBot 通过多类事件重复派发，导致作答被重复处理。
-            if not self._dedup_ok(group, event):
+            if not self._dedup_ok(group, event, sender):
                 return
             # 入群算术验证：首次发言触发出题；作答期拦截其他处置。
             # 验证逻辑消费了这条消息时，阻断后续插件（如 LLM 人设）抢答。
@@ -914,6 +935,56 @@ class QQAutoKick(Star):
         removed = self.store.remove_ignored(group, user)
         yield event.plain_result("已移出忽略名单（之后会正常参与验证与规则）。" if removed else "该成员不在忽略名单中。")
 
+    @filter.command("验证排查", alias={"verify_debug"})
+    async def verify_debug(self, event: AstrMessageEvent, target: str = ""):
+        """排查某成员为什么没被验证：/验证排查 <openid>。"""
+        event.stop_event()
+        group = str(event.get_group_id() or "")
+        if not group:
+            yield event.plain_result("请在群内使用。")
+            return
+        if (msg := self._require_admin(event)):
+            yield event.plain_result(msg)
+            return
+        user = self._target_openid(event, target)
+        if not user:
+            yield event.plain_result("未识别到目标 openid。用法：/验证排查 <32位openid>。")
+            return
+
+        pending, status = self.verify.is_pending(group, user)
+        peek = self.verify.peek(group, user)
+        if not self._verify_enabled(group):
+            verdict = "本群验证已关闭（/验证开 打开）"
+        elif self.store.is_ignored(group, user):
+            verdict = "在忽略名单里 → 不会验证（/忽略删 移除）"
+        elif user in self.store.whitelist(group):
+            verdict = "在白名单里 → 不参与验证"
+        elif self.store.is_verified(group, user):
+            verdict = "已通过验证 → 不再出题"
+        elif pending:
+            verdict = (
+                f"正在等待作答：{peek.get('expr')} = ?（还有 "
+                f"{max(0, int(peek.get('expire', 0) - time.time())) // 60} 分钟）"
+            )
+        elif self.engine.is_seen(group, user):
+            verdict = "本次运行内已观测过（可能出题发送失败已回滚，或题已答错结束）"
+        else:
+            verdict = "尚未观测到该成员发言 → 他说下一句就会被出题"
+        yield event.plain_result(
+            "\n".join(
+                [
+                    f"成员：{user}",
+                    f"结论：{verdict}",
+                    f"已验证：{'是' if self.store.is_verified(group, user) else '否'}",
+                    f"待验证：{'是' if pending else '否'}",
+                    f"忽略名单：{'是' if self.store.is_ignored(group, user) else '否'}",
+                    f"白名单：{'是' if user in self.store.whitelist(group) else '否'}",
+                    f"本进程已观测：{'是' if self.engine.is_seen(group, user) else '否'}",
+                    f"本群验证开关：{'开' if self._verify_enabled(group) else '关'}",
+                ]
+            )
+        )
+
     @filter.command("验证导出", alias={"verify_export"})
     async def verify_export(self, event: AstrMessageEvent):
         """导出本群已验证名单（用于更新/迁移前备份）：/验证导出。"""
@@ -1041,6 +1112,7 @@ class QQAutoKick(Star):
             "/验证导出 导出本群已验证名单（更新前备份）\n"
             "/验证导入 <openid列表> 更新后恢复名单\n"
             "/验证清除 确认 清空本群已验证（全群重新验证）\n"
+            "/验证排查 <openid> 排查某人为什么没被验证\n"
             "/忽略 <openid>｜/忽略删 <openid>｜/忽略列表\n"
             "/踢人待办 [清空]\n"
             "注意：官方平台只提供 openid（32 位十六进制），不是 QQ 号。"

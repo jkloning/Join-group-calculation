@@ -11,9 +11,9 @@
     "name": "astrbot_plugin_qq_autokick",
     "display_name": "QQ群自动踢人",
     "short_desc": "刷屏/关键词/广告自动踢人 + 入群算术验证",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "repo": "https://github.com/jkloning/qq-",
-    "desc": "QQ 官方机器人群管理：刷屏/关键词/广告自动踢人或禁言、入群算术验证、其他机器人与管理员自动忽略。",
+    "desc": "QQ 官方机器人群管理：刷屏/关键词/广告自动踢人或禁言、入群算术验证、其他机器人与管理员自动忽略；出题发送失败自动回滚，不会漏验证。",
     "tags": ["群管理", "自动踢人", "入群验证"],
     "support_platforms": ["qq_official", "aiocqhttp"],
     "astrbot_version": ">=4.24.2"

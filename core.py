@@ -117,6 +117,18 @@ class RuleEngine:
         self._first_seen.pop(key, None)
         self._acted.pop(key, None)
 
+    def untouch(self, group: str, user: str) -> None:
+        """撤销「已首次观测」标记。
+
+        用于「出题消息发送失败」时回滚：否则该成员会被永久视为已见过而不再出题，
+        同时又因为处于待验证状态在 10 分钟后被误踢。
+        """
+        self._first_seen.pop(self._key(group, user), None)
+
+    def is_seen(self, group: str, user: str) -> bool:
+        """本进程内是否已观测过该成员（用于排查「为什么没出题」）。"""
+        return self._key(group, user) in self._first_seen
+
     def is_newcomer(self, group: str, user: str) -> bool:
         first = self._first_seen.get(self._key(group, user))
         return first is not None and (self.clock() - first) <= self.newbie_window

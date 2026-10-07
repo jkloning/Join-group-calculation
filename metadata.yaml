@@ -9,7 +9,8 @@ desc: |
   - 其他机器人（如 Q群管家）与群主/管理员自动忽略，不会被误出题或误踢
   - 已验证名单、白名单、忽略名单持久化，更新插件后不丢失
   - 踢人接口无权限时自动降级禁言，并记入待办供人工处理
-version: 1.1.0
+  - 出题消息发送失败会自动回滚，不会出现「某人被永久跳过」或静默超时被误踢
+version: 1.1.1
 author: jkloning
 repo: https://github.com/jkloning/qq-
 astrbot_version: '>=4.24.2'
