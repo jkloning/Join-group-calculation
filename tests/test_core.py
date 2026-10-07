@@ -349,6 +349,18 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(len(reloaded.verified(GROUP)), 3)
         self.assertEqual(reloaded.import_verified(GROUP, [USER]), 0)
 
+    def test_ignored_list_persist(self):
+        store = StateStore(self.path)
+        self.assertFalse(store.is_ignored(GROUP, USER))
+        self.assertTrue(store.add_ignored(GROUP, USER))
+        self.assertFalse(store.add_ignored(GROUP, USER))
+        again = StateStore(self.path)
+        self.assertTrue(again.is_ignored(GROUP, USER))
+        self.assertEqual(again.ignored(GROUP), [USER])
+        self.assertTrue(again.remove_ignored(GROUP, USER))
+        self.assertFalse(again.remove_ignored(GROUP, USER))
+        self.assertEqual(again.ignored(GROUP), [])
+
     def test_corrupt_file_recovers(self):
         self.path.write_text("{not json", encoding="utf-8")
         store = StateStore(self.path)

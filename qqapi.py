@@ -28,6 +28,9 @@ BEIJING = timezone(timedelta(hours=8))
 # 官方文档中与「无权限 / 未开通」相关的错误码
 PERMISSION_CODES = {11253, 11244, 11252, 11255, 10001}
 
+# 「目标成员不可被管理（机器人 / 群主 / 管理员）」——遇到这些就别再对它动手了
+UNMANAGEABLE_CODES = {40103004, 11254, 11255}
+
 
 @dataclass
 class APIResult:
@@ -40,6 +43,16 @@ class APIResult:
     @property
     def permission_denied(self) -> bool:
         return self.http_status in (401, 403) or self.code in PERMISSION_CODES
+
+    @property
+    def unmanageable(self) -> bool:
+        """该成员是机器人 / 群主 / 管理员，平台不允许禁言或移出。"""
+        if self.code in UNMANAGEABLE_CODES:
+            return True
+        text = self.message or ""
+        return ("机器人" in text and ("不允许" in text or "不可" in text)) or (
+            "管理员" in text and "不允许" in text
+        )
 
     def brief(self) -> str:
         if self.ok:

@@ -403,6 +403,36 @@ class StateStore:
             self.save()
         return added
 
+    # 每群「忽略名单」：其他机器人 / 群主 / 管理员等不该被验证和处置的成员
+    def ignored(self, group_id: str) -> List[str]:
+        item = self.group(group_id)
+        item.setdefault("ignored", [])
+        return [str(x) for x in item.get("ignored", [])]
+
+    def is_ignored(self, group_id: str, user_id: str) -> bool:
+        return str(user_id) in self.ignored(group_id)
+
+    def add_ignored(self, group_id: str, user_id: str) -> bool:
+        item = self.group(group_id)
+        item.setdefault("ignored", [])
+        table = [str(x) for x in item.get("ignored", [])]
+        if str(user_id) in table:
+            return False
+        table.append(str(user_id))
+        item["ignored"] = table
+        self.save()
+        return True
+
+    def remove_ignored(self, group_id: str, user_id: str) -> bool:
+        item = self.group(group_id)
+        table = [str(x) for x in item.get("ignored", [])]
+        if str(user_id) not in table:
+            return False
+        table.remove(str(user_id))
+        item["ignored"] = table
+        self.save()
+        return True
+
     def toggle(self, group_id: str) -> bool:
         value = not self.is_enabled(group_id)
         self.set_enabled(group_id, value)

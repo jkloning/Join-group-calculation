@@ -174,6 +174,23 @@ class QQAutoKick(Star):
         found = extract_openids(event.message_str or "")
         return found[0].upper() if found else ""
 
+    def _ignore_unmanageable(self, group: str, user: str) -> None:
+        """把「机器人/群主/管理员」记入忽略名单，并清掉它的待验证状态。"""
+        with suppress(Exception):
+            self.verify.force(group, user)
+        if self.store.add_ignored(group, user):
+            logger.info(f"[auto_kick] 已加入忽略名单（不可管理成员）群={group} 成员={user}")
+
+    def _bot_like(self, name: str) -> bool:
+        """昵称像机器人（如 Q群管家 / 小助手 / xxxBot）的，一律不验证、不处置。"""
+        text = (name or "").strip().lower()
+        if not text:
+            return False
+        keywords = self.config.get("bot_name_keywords") or [
+            "管家", "机器人", "小助手", "助手", "bot", "robot", "助理",
+        ]
+        return any(str(k).strip().lower() in text for k in keywords if str(k).strip())
+
     # ==================== 处置 ====================
     async def _enforce(self, event, group: str, user: str, decision: Decision, manual: bool = False):
         action = decision.action or ("kick" if manual else "")
@@ -207,8 +224,21 @@ class QQAutoKick(Star):
                             "或用 /踢人待办 查看后手动移出。"
                         )
                     else:
-                        self.store.add_pending(group, user, reason)
-                        notes.append(f"踢人与禁言均失败：{mute.brief()}；已记入待办，请管理员手动移出。")
+                        if mute.unmanageable:
+                            self._ignore_unmanageable(group, user)
+                            notes.append(
+                                f"该成员是机器人/群主/管理员，平台不允许处置（{mute.brief()}）；"
+                                "已自动加入忽略名单。"
+                            )
+                        else:
+                            self.store.add_pending(group, user, reason)
+                            notes.append(f"踢人与禁言均失败：{mute.brief()}；已记入待办，请管理员手动移出。")
+                elif res.unmanageable:
+                    self._ignore_unmanageable(group, user)
+                    notes.append(
+                        f"该成员是机器人/群主/管理员，平台不允许移出（{res.brief()}）；"
+                        "已自动加入忽略名单，之后不再对它出题或处置。"
+                    )
                 else:
                     self.store.add_pending(group, user, reason)
                     notes.append(f"踢人失败：{res.brief()}；已记入待办。")
@@ -217,6 +247,13 @@ class QQAutoKick(Star):
                 res = await self.api.mute_member(group, user, seconds)
                 if res.ok:
                     notes.append(f"已禁言 {max(1, seconds // 60)} 分钟（{reason}）")
+                elif res.unmanageable:
+                    # 平台明确说这是机器人/群主/管理员 → 记入忽略名单，以后不再验证、不再处置
+                    self._ignore_unmanageable(group, user)
+                    notes.append(
+                        f"该成员是机器人/群主/管理员，平台不允许禁言（{res.brief()}）；"
+                        "已自动加入忽略名单，之后不再对它出题或处置。"
+                    )
                 else:
                     notes.append(f"禁言失败：{res.brief()}（机器人需为群管理员）")
 
@@ -481,6 +518,17 @@ class QQAutoKick(Star):
                 return  # 指令交给下面的命令处理
             sender = str(event.get_sender_id() or "")
             if not sender or sender in self.store.whitelist(group):
+                return
+            # 其他机器人 / 群主 / 管理员：不验证、不处置（否则会给出题后踢掉，如 Q群管家）
+            if self.store.is_ignored(group, sender):
+                return
+            try:
+                sender_name = str(event.get_sender_name() or "")
+            except Exception:
+                sender_name = ""
+            if self._bot_like(sender_name):
+                self._ignore_unmanageable(group, sender)
+                logger.info(f"[auto_kick] 昵称疑似机器人，已忽略：{sender_name}（{sender}）")
                 return
             # 防同一条消息被 AstrBot 通过多类事件重复派发，导致作答被重复处理。
             if not self._dedup_ok(group, event):
@@ -815,6 +863,57 @@ class QQAutoKick(Star):
         self.store.add_verified(group, user)
         yield event.plain_result("已放行该成员。" if removed else "该成员不在待验证状态（已标记为已验证）。")
 
+    @filter.command("忽略列表", alias={"ignore_list"})
+    async def ignore_list(self, event: AstrMessageEvent):
+        """查看本群忽略名单（不验证、不处置的成员）。"""
+        event.stop_event()
+        group = str(event.get_group_id() or "")
+        if not group:
+            yield event.plain_result("请在群内使用。")
+            return
+        rows = self.store.ignored(group)
+        yield event.plain_result(
+            "本群忽略名单（不验证、不处置）：\n" + "\n".join(rows) if rows
+            else "忽略名单为空。其他机器人和群主/管理员在被处置失败后会自动加入。"
+        )
+
+    @filter.command("忽略", alias={"ignore_add"})
+    async def ignore_add(self, event: AstrMessageEvent, target: str = ""):
+        """把某成员加入忽略名单：/忽略 <openid>。"""
+        event.stop_event()
+        group = str(event.get_group_id() or "")
+        if not group:
+            yield event.plain_result("请在群内使用。")
+            return
+        if (msg := self._require_admin(event)):
+            yield event.plain_result(msg)
+            return
+        user = self._target_openid(event, target)
+        if not user:
+            yield event.plain_result("未识别到目标 openid。用法：/忽略 <32位openid>。")
+            return
+        added = self.store.add_ignored(group, user)
+        self.verify.force(group, user)
+        yield event.plain_result("已加入忽略名单。" if added else "该成员已在忽略名单中。")
+
+    @filter.command("忽略删", alias={"ignore_del"})
+    async def ignore_del(self, event: AstrMessageEvent, target: str = ""):
+        """移出忽略名单：/忽略删 <openid>。"""
+        event.stop_event()
+        group = str(event.get_group_id() or "")
+        if not group:
+            yield event.plain_result("请在群内使用。")
+            return
+        if (msg := self._require_admin(event)):
+            yield event.plain_result(msg)
+            return
+        user = self._target_openid(event, target)
+        if not user:
+            yield event.plain_result("未识别到目标 openid。")
+            return
+        removed = self.store.remove_ignored(group, user)
+        yield event.plain_result("已移出忽略名单（之后会正常参与验证与规则）。" if removed else "该成员不在忽略名单中。")
+
     @filter.command("验证导出", alias={"verify_export"})
     async def verify_export(self, event: AstrMessageEvent):
         """导出本群已验证名单（用于更新/迁移前备份）：/验证导出。"""
@@ -942,6 +1041,7 @@ class QQAutoKick(Star):
             "/验证导出 导出本群已验证名单（更新前备份）\n"
             "/验证导入 <openid列表> 更新后恢复名单\n"
             "/验证清除 确认 清空本群已验证（全群重新验证）\n"
+            "/忽略 <openid>｜/忽略删 <openid>｜/忽略列表\n"
             "/踢人待办 [清空]\n"
             "注意：官方平台只提供 openid（32 位十六进制），不是 QQ 号。"
         )
