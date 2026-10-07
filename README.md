@@ -163,7 +163,81 @@ cp /root/autokick-state.bak /AstrBot/data/plugin_data/astrbot_plugin_qq_autokick
 }
 ```
 
-`*_action` 取值：`kick` / `mute` / `off`。验证配置：`verify_enabled`（总开关）、`verify_timeout_sec`（限时秒，默认 600=10 分钟，超时踢）、`verify_max_number`（数字上限，默认 50）、`verify_wrong_mute_seconds`（答错禁言时长秒，默认 600=10 分钟）。
+`*_action` 取值：`kick` / `mute` / `off`。验证配置：`verify_enabled`（总开关）、`verify_timeout_sec`（限时秒，默认 600=10 分钟，超时踢）、`verify_max_number`（数字上限，默认 50）、`verify_wrong_mute_seconds`（答错禁言时长秒，默认 600=10 分钟）。状态位置：`state_file`（留空则用 AstrBot 数据目录）。
+
+## 八、让 AstrBot 自动识别插件更新
+
+### 8.1 AstrBot 的判定链路（源码依据）
+
+以 AstrBot `v4.28.2` 为准，更新检测分两层：
+
+**① 是否允许更新** —— `astrbot/dashboard/services/plugin_service.py`：
+
+```python
+updates_enabled = (install_method in {"market", "repository"} and not plugin.reserved)
+```
+
+| 安装方式 | install_method | 能否更新 |
+| --- | --- | --- |
+| 插件市场安装 | `market` | ✅ 可检测 + 可更新 |
+| GitHub 仓库安装 | `repository` | ✅ 可更新（凭 `repo` 字段拉取），但**不出「有新版本」提示** |
+| zip / 上传安装 | `upload` | ❌ 提示「该插件不是通过插件市场安装，无法检测或执行更新。」 |
+| 早期安装（无来源记录） | 隐式记录 | ❌ 提示「请先选择插件安装源后再更新。」 |
+
+**② 是否有新版本** —— 前端 `dashboard/src/views/extension/useExtensionPage.js` 的 `checkUpdate()`：
+
+```js
+if (!extension.updates_enabled || !source || source.install_method !== "market") return;
+```
+
+**只有 `install_method === "market"` 才会去比对版本**。匹配市场记录的优先级是
+`install_source.market_plugin_id` → `install_source.repo` → `插件名（下划线转连字符）`，
+命中后比较 `metadata.yaml` 的 `version` 与市场记录里的 `version`，前者更小才标红。
+
+### 8.2 三个必要条件
+
+1. **`metadata.yaml` 必须有 `repo` 字段**（否则插件不知道自己该从哪更新）。
+2. **每次发版必须递增 `version`**，且必须与市场记录里的 `version` **完全一致**（市场规范强制校验 `author`/`name`/`version` 三字段与 `metadata.yaml` 相等）。
+3. **插件必须能在某个「插件源」里被找到**，否则永远比较不出新版本。
+
+### 8.3 三种做法（选一个）
+
+**方案 A：发布到官方插件市场（最省心）**
+
+插件代码推到 GitHub 后，去 [AstrBot 插件发布页](https://cloud.astrbot.app/publish) 提交（需 AstrBot Cloud 账号）。
+之后官方市场 JSON 里就有你的记录，用户安装即为 `market` 方式，更新自动提示。
+
+**方案 B：自建插件源 + 绑定（不用审核，本仓库已带模板）**
+
+仓库里已经放了 [`market/plugins.json`](market/plugins.json)，符合[插件市场 JSON 规范](https://docs.astrbot.app/dev/plugin-market/2026-06-27.html)。
+用它的 raw 地址作为自定义源：
+
+```text
+https://raw.githubusercontent.com/jkloning/qq-/main/market/plugins.json
+```
+
+WebUI 操作：**插件 → 插件市场 → 管理插件源 → 添加** 填上面的 URL；
+再对已安装的插件点 **更换/绑定插件源**，选中该源。
+绑定后 `install_method` 变为 `market`，版本比对生效（首次绑定要求市场记录的 `repo` 与本地一致，本仓库两者都是 `https://github.com/jkloning/qq-`，可直接通过）。
+
+> 自定义源就是**直接 GET 你填的那个 URL**，返回插件市场 JSON 即可。
+> 它还会尝试 GET 同目录的 `plugins-md5.json` 做缓存校验；该文件可选，缺失只会导致每次都重新拉取。
+
+**方案 C：只让「更新」按钮可用**
+
+以 **GitHub 仓库方式**安装（WebUI → 安装插件 → 填 `https://github.com/jkloning/qq-`），
+`install_method` 为 `repository`，更新按钮会按 `metadata.yaml` 的 `repo` 直接拉最新代码 —— 但没有「有新版本」红点提示，需要自己点。
+
+### 8.4 每次发版的固定动作
+
+```bash
+# 1) 改 metadata.yaml 的 version（例如 1.1.0 → 1.1.1）
+# 2) 同步改 market/plugins.json 里的 version（方案 B 必须，否则比对不出更新）
+# 3) 在 CHANGELOG.md 顶部追加一段（AstrBot 插件详情页会读取根目录 CHANGELOG.md）
+git add -A && git commit -m "release 1.1.1" && git push
+```
+
+版本号用 `1.1.1` 这种纯数字语义化写法，不要带 `v` 前缀。
 
 ## 九、故障排查
 
@@ -178,6 +252,9 @@ cp /root/autokick-state.bak /AstrBot/data/plugin_data/astrbot_plugin_qq_autokick
 | 换回 NapCat 后行为异常 | 插件会自动走 `set_group_kick` / `set_group_ban`，openid 概念在 OneBot 下等同于 QQ 号 |
 | 日志出现 `40103004 目标成员为机器人/群主/管理员` | 正常现象：插件已自动把该成员加入忽略名单，之后不再验证/处置 |
 | 群管家/其他机器人被出题 | 已由 `bot_name_keywords` 与忽略名单拦截；若昵称特殊，用 `/忽略 <openid>` 手动加 |
+| 插件列表里没有「有更新」提示 | 安装方式不是 `market`。见第八节：用自建插件源绑定，或发布到官方插件市场 |
+| 点更新提示「请先选择插件安装源后再更新」 | 该插件是早期安装、没有来源记录。在插件卡片上「更换插件源」绑定一个源即可 |
+| 点更新提示「不是通过插件市场安装」 | 安装方式是 zip 上传。改用 GitHub 仓库安装或市场安装 |
 
 ## 十、本地自检
 

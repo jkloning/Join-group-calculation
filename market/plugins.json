@@ -1,0 +1,21 @@
+{
+  "$meta": {
+    "schema_version": 1,
+    "name": "jkloning self-hosted plugin source",
+    "version": "2026-10-07",
+    "homepage": "https://github.com/jkloning/qq-",
+    "repository": "https://github.com/jkloning/qq-"
+  },
+  "jkloning/astrbot_plugin_qq_autokick": {
+    "author": "jkloning",
+    "name": "astrbot_plugin_qq_autokick",
+    "display_name": "QQ群自动踢人",
+    "short_desc": "刷屏/关键词/广告自动踢人 + 入群算术验证",
+    "version": "1.1.0",
+    "repo": "https://github.com/jkloning/qq-",
+    "desc": "QQ 官方机器人群管理：刷屏/关键词/广告自动踢人或禁言、入群算术验证、其他机器人与管理员自动忽略。",
+    "tags": ["群管理", "自动踢人", "入群验证"],
+    "support_platforms": ["qq_official", "aiocqhttp"],
+    "astrbot_version": ">=4.24.2"
+  }
+}

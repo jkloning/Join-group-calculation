@@ -1,6 +1,22 @@
 name: astrbot_plugin_qq_autokick
 display_name: QQ群自动踢人
-desc: QQ官方机器人（Websocket）群自动踢人/禁言：刷屏、关键词、广告链接、新人广告自动处置；踢人接口无权限时自动降级禁言。
-version: v1.0.0
-author: local
+short_desc: 刷屏/关键词/广告自动踢人 + 入群算术验证
+desc: |
+  QQ 官方机器人（Websocket）群管理插件。
+
+  - 自动处置：刷屏、复读、关键词、广告链接，可分别配置踢人或禁言
+  - 入群算术验证：50 以内加减乘除，10 分钟限时，答错禁言、超时踢人
+  - 其他机器人（如 Q群管家）与群主/管理员自动忽略，不会被误出题或误踢
+  - 已验证名单、白名单、忽略名单持久化，更新插件后不丢失
+  - 踢人接口无权限时自动降级禁言，并记入待办供人工处理
+version: 1.1.0
+author: jkloning
+repo: https://github.com/jkloning/qq-
 astrbot_version: '>=4.24.2'
+support_platforms:
+  - qq_official
+  - aiocqhttp
+tags:
+  - 群管理
+  - 自动踢人
+  - 入群验证
