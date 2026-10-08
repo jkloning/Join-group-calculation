@@ -12,7 +12,7 @@ desc: |
   - 出题消息发送失败会自动回滚，不会出现「某人被永久跳过」或静默超时被误踢
 version: 1.1.1
 author: jkloning
-repo: https://github.com/jkloning/qq-
+repo: https://github.com/jkloning/Join-group-calculation
 astrbot_version: '>=4.24.2'
 support_platforms:
   - qq_official
